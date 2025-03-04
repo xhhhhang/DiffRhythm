@@ -1,7 +1,7 @@
 # Copyright (c) 2025 ASLP-LAB
-#               2025 Ziqian Ning   (xxx@gmail.com)
-#               2025 Huakang Chen  (xxx@gmail.com)
-#               2025 Guobin Ma     (xxx@gmail.com)
+#               2025 Ziqian Ning   (ningziqian@mail.nwpu.edu.cn)
+#               2025 Huakang Chen  (huakang@mail.nwpu.edu.cn)
+#               2025 Guobin Ma     (guobin.ma@mail.nwpu.edu.cn)
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
