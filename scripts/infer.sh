@@ -3,7 +3,7 @@ cd ../
 
 export PYTHONPATH=$PYTHONPATH:$PWD
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 python3 infer/infer.py \
     --lrc-path infer/example/eg_cn.lrc \

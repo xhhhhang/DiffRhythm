@@ -2,11 +2,11 @@
 #               2025 Ziqian Ning   (ningziqian@mail.nwpu.edu.cn)
 #               2025 Huakang Chen  (huakang@mail.nwpu.edu.cn)
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
+# Licensed under the Stability AI License (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+#   https://huggingface.co/stabilityai/stable-audio-open-1.0/blob/main/LICENSE.md
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -167,7 +167,8 @@ class Trainer:
         self.scheduler = ConstantLR(self.optimizer, factor=1, total_iters=total_steps)
 
     def get_dataloader(self):
-        dd = DiffusionDataset(self.args.file_path, self.args.max_frames, self.args.min_frames, selg.args.sampling_rate, self.args.downsample_rate, self.args.precision)
+        print(self.args)
+        dd = DiffusionDataset(self.args.file_path, self.args.max_frames, self.args.min_frames, self.args.sampling_rate, self.args.downsample_rate, self.precision)
         self.train_dataloader = DataLoader(
             dataset=dd,
             batch_size=self.args.batch_size,

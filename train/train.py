@@ -2,11 +2,11 @@
 #               2025 Ziqian Ning   (ningziqian@mail.nwpu.edu.cn)
 #               2025 Huakang Chen  (huakang@mail.nwpu.edu.cn)
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
+# Licensed under the Stability AI License (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+#   https://huggingface.co/stabilityai/stable-audio-open-1.0/blob/main/LICENSE.md
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,12 +26,12 @@ os.environ['OMP_NUM_THREADS']="1"
 os.environ['MKL_NUM_THREADS']="1"
 
 def main():
-    args = get_all_args()
+    args = get_all_args("config/default.ini")
 
     with open(args.model_config) as f:
         model_config = json.load(f)
 
-    if model_config["model_type"] == "F5TTS_Base":
+    if model_config["model_type"] == "diffrhythm":
         wandb_resume_id = None
         model_cls = DiT
 
@@ -54,7 +54,7 @@ def main():
         args.learning_rate,
         num_warmup_updates=args.num_warmup_updates,
         save_per_updates=args.save_per_updates,
-        checkpoint_path=str(files("diffrhythm").joinpath(f"../../ckpts/{args.exp_name}")),
+        checkpoint_path=f"ckpts/{args.exp_name}",
         grad_accumulation_steps=args.grad_accumulation_steps,
         max_grad_norm=args.max_grad_norm,
         wandb_project="diffrhythm-test",
