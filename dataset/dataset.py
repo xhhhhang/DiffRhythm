@@ -163,7 +163,6 @@ class DiffusionDataset(torch.utils.data.Dataset):
                 "prompt_lengths": prompt_lengths, "lrc_lengths": lrc_lengths, "latent_lengths": latent_lengths, \
                 "start_time": start_time_tensor}
 
-
 if __name__ == "__main__":
     dd = DiffusionDataset("train.scp", 2048, 512)
     x = dd[0]

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import gc
+from itertools import islice
 from tqdm import tqdm
 import wandb
 
@@ -31,20 +32,20 @@ from torch.optim.lr_scheduler import LinearLR, SequentialLR, ConstantLR
 
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
-from dataset.dataset import DiffusionDataset
+from ..dataset.dataset import DiffusionDataset
 
 from torch.utils.data import DataLoader
 
 from ema_pytorch import EMA
 
-from model import CFM
-from model.utils import exists, default
+from .cfm import CFM
+from .utils import exists, default
 
 class Trainer:
     def __init__(
         self,
         model: CFM,
-        args,
+        data_cfg,
         epochs,
         learning_rate,
         num_warmup_updates=20000,
@@ -60,6 +61,7 @@ class Trainer:
         wandb_project="test_e2-tts",
         wandb_run_name="test_run",
         wandb_resume_id: str = None,
+        wandb_mode: str = "online",
         last_per_steps=None,
         accelerate_kwargs: dict = dict(),
         ema_kwargs: dict = dict(),
@@ -68,7 +70,7 @@ class Trainer:
         use_style_prompt: bool = False,
         grad_ckpt: bool = False
     ):
-        self.args = args
+        self.data_cfg = data_cfg
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, )
 
@@ -83,9 +85,9 @@ class Trainer:
 
         if logger == "wandb":
             if exists(wandb_resume_id):
-                init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name, "id": wandb_resume_id}}
+                init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name, "id": wandb_resume_id, "mode": wandb_mode}}
             else:
-                init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name}}
+                init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name, "mode": wandb_mode}}
             self.accelerator.init_trackers(
                 project_name=wandb_project,
                 init_kwargs=init_kwargs,
@@ -167,11 +169,11 @@ class Trainer:
         self.scheduler = ConstantLR(self.optimizer, factor=1, total_iters=total_steps)
 
     def get_dataloader(self):
-        print(self.args)
-        dd = DiffusionDataset(self.args.file_path, self.args.max_frames, self.args.min_frames, self.args.sampling_rate, self.args.downsample_rate, self.precision)
+        print(self.data_cfg)
+        dd = DiffusionDataset(self.data_cfg.file_path, self.data_cfg.max_frames, self.data_cfg.min_frames, self.data_cfg.sampling_rate, self.data_cfg.downsample_rate, self.precision)
         self.train_dataloader = DataLoader(
             dataset=dd,
-            batch_size=self.args.batch_size,
+            batch_size=self.data_cfg.batch_size,
             shuffle=True,
             num_workers=4,
             pin_memory=True,
@@ -189,7 +191,7 @@ class Trainer:
         if self.is_main:
             checkpoint = dict(
                 model_state_dict=self.accelerator.unwrap_model(self.model).state_dict(),
-                optimizer_state_dict=self.accelerator.unwrap_model(self.optimizer).state_dict(),
+                optimizer_state_dict=self.optimizer.state_dict(),
                 ema_model_state_dict=self.ema_model.state_dict(),
                 scheduler_state_dict=self.scheduler.state_dict(),
                 step=step,
