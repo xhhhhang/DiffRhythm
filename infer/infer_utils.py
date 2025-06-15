@@ -28,7 +28,8 @@ from huggingface_hub import hf_hub_download
 from sys import path
 path.append(os.getcwd())
 
-from model import DiT, CFM
+from ..model.cfm import CFM
+from ..model.dit import DiT
 
 def vae_sample(mean, scale):
     stdev = torch.nn.functional.softplus(scale) + 1e-4
@@ -276,8 +277,10 @@ def get_reference_latent(device, max_frames, edit, pred_segments, ref_song, vae_
         return prompt, pred_frames
 
 
-def get_negative_style_prompt(device):
-    file_path = "infer/example/vocal.npy"
+def get_negative_style_prompt(device, file_path=None):
+    if file_path is None:
+        file_path = "infer/example/vocal.npy"
+
     vocal_stlye = np.load(file_path)
 
     vocal_stlye = torch.from_numpy(vocal_stlye).to(device)  # [1, 512]

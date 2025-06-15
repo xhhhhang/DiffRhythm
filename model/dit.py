@@ -80,6 +80,7 @@ class TextEmbedding(nn.Module):
 class InputEmbedding(nn.Module):
     def __init__(self, mel_dim, text_dim, out_dim, cond_dim):
         super().__init__()
+        # Updated to handle mel, cond, text, style, and time+duration embeddings
         self.proj = nn.Linear(mel_dim * 2 + text_dim + cond_dim * 2, out_dim)
         self.conv_pos_embed = ConvPositionEmbedding(dim=out_dim)
 
@@ -118,6 +119,8 @@ class DiT(nn.Module):
         cond_dim = 512
         self.time_embed = TimestepEmbedding(cond_dim)
         self.start_time_embed = TimestepEmbedding(cond_dim)
+        self.duration_abs_embed = TimestepEmbedding(cond_dim)
+        self.duration_rel_embed = TimestepEmbedding(cond_dim)
         if text_dim is None:
             text_dim = mel_dim
         self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers=conv_layers, max_pos=self.max_frames)
@@ -149,8 +152,9 @@ class DiT(nn.Module):
         self.norm_out = AdaLayerNormZero_Final(dim, cond_dim)  # final modulation
         self.proj_out = nn.Linear(dim, mel_dim)
 
-    def forward_timestep_invariant(self, text, seq_len, drop_text, start_time):
-        s_t = self.start_time_embed(start_time)
+    def forward_timestep_invariant(self, text, seq_len, drop_text, start_time, duration_abs=None, duration_rel=None):
+        s_t = self.start_time_embed(start_time) + self.duration_abs_embed(duration_abs) + self.duration_rel_embed(duration_rel)
+        
         text_embed = self.text_embed(text, seq_len, drop_text=drop_text)
         text_residuals = []
         for layer in self.text_fusion_linears:
@@ -170,6 +174,8 @@ class DiT(nn.Module):
         drop_prompt=False,
         style_prompt=None, # [b d t]
         start_time=None,
+        duration_abs=None,
+        duration_rel=None,
     ):
 
         batch, seq_len = x.shape[0], x.shape[1]
@@ -178,8 +184,9 @@ class DiT(nn.Module):
 
         # t: conditioning time, c: context (text + masked cond audio), x: noised input audio
         t = self.time_embed(time)
-        s_t = self.start_time_embed(start_time)
-        c = t + s_t
+        time_embed = self.start_time_embed(start_time) + self.duration_abs_embed(duration_abs) + self.duration_rel_embed(duration_rel)
+        
+        c = t + time_embed
         text_embed = self.text_embed(text, seq_len, drop_text=drop_text)
 
         if drop_prompt:

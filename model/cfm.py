@@ -121,7 +121,8 @@ class CFM(nn.Module):
         duration: int | int["b"],  # noqa: F821
         *,
         style_prompt = None,
-        style_prompt_lens = None,
+        duration_abs=None,
+        duration_rel=None,
         negative_style_prompt = None,
         lens: int["b"] | None = None,  # noqa: F821
         steps=32,
@@ -136,7 +137,7 @@ class CFM(nn.Module):
         edit_mask=None,
         start_time=None,
         latent_pred_segments=None,
-        batch_infer_num=1
+        batch_infer_num=1,
     ):
         self.eval()
 
@@ -199,33 +200,38 @@ class CFM(nn.Module):
         style_prompt = style_prompt.repeat(batch_infer_num, 1)
         negative_style_prompt = negative_style_prompt.repeat(batch_infer_num, 1)
         start_time = start_time.repeat(batch_infer_num)
+        duration_abs = duration_abs.repeat(batch_infer_num)
+        duration_rel = duration_rel.repeat(batch_infer_num)
         fixed_span_mask = fixed_span_mask.repeat(batch_infer_num, 1, 1)
 
         def fn(t, x):
             # predict flow
             pred = self.transformer(
                 x=x, cond=step_cond, text=text, time=t, drop_audio_cond=False, drop_text=False, drop_prompt=False,
-                style_prompt=style_prompt, start_time=start_time
+                style_prompt=style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
             )
             if cfg_strength < 1e-5:
                 return pred
 
             null_pred = self.transformer(
                 x=x, cond=step_cond, text=text, time=t, drop_audio_cond=True, drop_text=True, drop_prompt=False,
-                style_prompt=negative_style_prompt, start_time=start_time
+                style_prompt=negative_style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
             )
             return pred + (pred - null_pred) * cfg_strength
 
         # noise input
         # to make sure batch inference result is same with different batch size, and for sure single inference
         # still some difference maybe due to convolutional layers
-        y0 = []
-        for dur in duration:
-            if exists(seed):
-                torch.manual_seed(seed)
-            y0.append(torch.randn(dur, self.num_channels, device=self.device, dtype=step_cond.dtype))
-        y0 = pad_sequence(y0, padding_value=0, batch_first=True)
+        # y0 = []
+        # for dur in duration:
+        #     if exists(seed):
+        #         torch.manual_seed(seed)
+        #     y0.append(torch.randn(dur, self.num_channels, device=self.device, dtype=step_cond.dtype))
+        # y0 = pad_sequence(y0, padding_value=0, batch_first=True)
 
+        # t_start = 0
+
+        y0 = torch.randn(batch_infer_num, self.max_frames, self.num_channels, device=self.device, dtype=step_cond.dtype)
         t_start = 0
 
         # duplicate test corner for inner time step oberservation
@@ -256,11 +262,10 @@ class CFM(nn.Module):
         inp: float["b n d"] | float["b nw"],  # mel or raw wave  # noqa: F722
         text: int["b nt"] | list[str],  # noqa: F722
         style_prompt = None,
-        style_prompt_lens = None,
         lens: int["b"] | None = None,  # noqa: F821
-        noise_scheduler: str | None = None,
-        grad_ckpt = False,
         start_time = None,
+        duration_abs = None,
+        duration_rel = None,
     ):
 
         batch, seq_len, dtype, device, _σ1 = *inp.shape[:2], inp.dtype, self.device, self.sigma
@@ -306,7 +311,7 @@ class CFM(nn.Module):
         # adding mask will use more memory, thus also need to adjust batchsampler with scaled down threshold for long sequences
         pred = self.transformer(
             x=φ, cond=cond, text=text, time=time, drop_audio_cond=drop_audio_cond, drop_text=drop_text, drop_prompt=drop_prompt,
-            style_prompt=style_prompt, start_time=start_time
+            style_prompt=style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
         )
 
         # flow matching loss
