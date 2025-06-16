@@ -47,10 +47,14 @@ class TextEmbedding(nn.Module):
         if conv_layers > 0:
             self.extra_modeling = True
             self.precompute_max_pos = max_pos  # ~44s of 24khz audio
-            self.register_buffer("freqs_cis", precompute_freqs_cis(text_dim, self.precompute_max_pos), persistent=False)
+            self.register_buffer("freqs_cis", precompute_freqs_cis(text_dim, 4 * self.precompute_max_pos), persistent=False)
             self.text_blocks = nn.Sequential(
                 *[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)]
             )
+            self.downsample_blocks = nn.Sequential(
+                *[torch.nn.Conv1d(text_dim, text_dim, kernel_size=2 * 2, stride=2, padding=1) for _ in range(2)]
+            )
+                
         else:
             self.extra_modeling = False
 
@@ -66,12 +70,13 @@ class TextEmbedding(nn.Module):
         if self.extra_modeling:
             # sinus pos emb
             batch_start = torch.zeros((batch,), dtype=torch.long)
-            pos_idx = get_pos_embed_indices(batch_start, seq_len, max_pos=self.precompute_max_pos)
+            pos_idx = get_pos_embed_indices(batch_start, 4*seq_len, max_pos=4*self.precompute_max_pos)
             text_pos_embed = self.freqs_cis[pos_idx]
             text = text + text_pos_embed
 
             # convnextv2 blocks
             text = self.text_blocks(text)
+            text = self.downsample_blocks(text.transpose(1, 2)).transpose(1, 2)
 
         return text
 
