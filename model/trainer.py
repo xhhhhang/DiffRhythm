@@ -68,7 +68,8 @@ class Trainer:
         bnb_optimizer: bool = False,
         reset_lr: bool = False,
         use_style_prompt: bool = False,
-        grad_ckpt: bool = False
+        grad_ckpt: bool = False,
+        use_ema: bool = False,
     ):
         self.data_cfg = data_cfg
 
@@ -110,7 +111,8 @@ class Trainer:
 
         self.model = model
 
-        if self.is_main:
+        self.use_ema = use_ema
+        if self.is_main and self.use_ema:
             self.ema_model = EMA(model, include_online_model=False, **ema_kwargs)
 
             self.ema_model.to(self.accelerator.device)
