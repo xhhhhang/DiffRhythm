@@ -24,6 +24,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 import torch
+from torch.utils.checkpoint import checkpoint
 
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRotaryEmbedding
 from transformers.models.llama import LlamaConfig
@@ -115,7 +116,8 @@ class DiT(nn.Module):
         text_dim=None,
         conv_layers=0,
         long_skip_connection=False,
-        max_frames=2048
+        max_frames=2048,
+        grad_ckpt=False
     ):
         super().__init__()
         
@@ -130,6 +132,7 @@ class DiT(nn.Module):
             text_dim = mel_dim
         self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers=conv_layers, max_pos=self.max_frames)
         self.input_embed = InputEmbedding(mel_dim, text_dim, dim, cond_dim=cond_dim)
+        self.grad_ckpt = grad_ckpt
 
         self.dim = dim
         self.depth = depth
@@ -220,7 +223,11 @@ class DiT(nn.Module):
         )
 
         for i, block in enumerate(self.transformer_blocks):
-            x, *_ = block(x, attention_mask=attention_mask, position_embeddings=rotary_embed)
+            if self.grad_ckpt:
+                print(f"Using gradient checkpointing for block {i}")
+                x, *_ = checkpoint(block, x, attention_mask, rotary_embed)
+            else:
+                x, *_ = block(x, attention_mask=attention_mask, position_embeddings=rotary_embed)
             if i < self.depth // 2:
                 x = x + self.text_fusion_linears[i](text_embed)
 
