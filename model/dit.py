@@ -117,7 +117,8 @@ class DiT(nn.Module):
         conv_layers=0,
         long_skip_connection=False,
         max_frames=2048,
-        grad_ckpt=False
+        grad_ckpt=False,
+        use_implicit_duration=False
     ):
         super().__init__()
         
@@ -133,9 +134,13 @@ class DiT(nn.Module):
         self.text_embed = TextEmbedding(text_num_embeds, text_dim, conv_layers=conv_layers, max_pos=self.max_frames)
         self.input_embed = InputEmbedding(mel_dim, text_dim, dim, cond_dim=cond_dim)
         self.grad_ckpt = grad_ckpt
-
         self.dim = dim
         self.depth = depth
+
+        self.use_implicit_duration = use_implicit_duration
+        if self.use_implicit_duration:
+            self.duration_pad_bias = nn.Parameter(torch.zeros(text_dim))
+            self.register_buffer("arange_T", torch.arange(self.max_frames), persistent=False)
 
         llama_config = LlamaConfig(hidden_size=dim, intermediate_size=dim * ff_mult, hidden_act='silu', max_position_embeddings=self.max_frames)
         llama_config._attn_implementation = 'sdpa'
@@ -160,17 +165,6 @@ class DiT(nn.Module):
         self.norm_out = AdaLayerNormZero_Final(dim, cond_dim)  # final modulation
         self.proj_out = nn.Linear(dim, mel_dim)
 
-    def forward_timestep_invariant(self, text, seq_len, drop_text, start_time, duration_abs=None, duration_rel=None):
-        s_t = self.start_time_embed(start_time) + self.duration_abs_embed(duration_abs) + self.duration_rel_embed(duration_rel)
-        
-        text_embed = self.text_embed(text, seq_len, drop_text=drop_text)
-        text_residuals = []
-        for layer in self.text_fusion_linears:
-            text_residual = layer(text_embed)
-            text_residuals.append(text_residual)
-        return s_t, text_embed, text_residuals
-
-
     def forward(
         self,
         x: float["b n d"],  # nosied input audio  # noqa: F722
@@ -193,9 +187,14 @@ class DiT(nn.Module):
         # t: conditioning time, c: context (text + masked cond audio), x: noised input audio
         t = self.time_embed(time)
         time_embed = self.start_time_embed(start_time) + self.duration_abs_embed(duration_abs) + self.duration_rel_embed(duration_rel)
-        
+
         c = t + time_embed
         text_embed = self.text_embed(text, seq_len, drop_text=drop_text)
+        if self.use_implicit_duration:
+            T_real = (self.max_frames * duration_rel).long() # (B,)
+            token_mask = self.arange_T[None, :] >= T_real[:, None] # (B, T)
+            # print(T_real, token_mask.shape, token_mask[:, -100:])
+            text_embed = text_embed + self.duration_pad_bias[None, None, :] * token_mask.unsqueeze(-1)
 
         if drop_prompt:
             style_prompt = torch.zeros_like(style_prompt)
@@ -223,9 +222,9 @@ class DiT(nn.Module):
         )
 
         for i, block in enumerate(self.transformer_blocks):
-            if self.grad_ckpt:
-                print(f"Using gradient checkpointing for block {i}")
-                x, *_ = checkpoint(block, x, attention_mask, rotary_embed)
+            if self.grad_ckpt and self.training:
+                # print(f"Using gradient checkpointing for block {i}")
+                x, *_ = checkpoint(block, x, attention_mask=attention_mask, position_embeddings=rotary_embed, use_reentrant=False)
             else:
                 x, *_ = block(x, attention_mask=attention_mask, position_embeddings=rotary_embed)
             if i < self.depth // 2:
