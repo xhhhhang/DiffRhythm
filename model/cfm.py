@@ -77,7 +77,8 @@ class CFM(nn.Module):
         num_channels=None,
         frac_lengths_mask: tuple[float, float] = (0.7, 1.0),
         vocab_char_map: dict[str:int] | None = None,
-        max_frames=2048
+        max_frames=2048,
+        no_edit=False
     ):
         super().__init__()
 
@@ -108,6 +109,7 @@ class CFM(nn.Module):
         self.vocab_char_map = vocab_char_map
         
         self.max_frames = max_frames
+        self.no_edit = no_edit
 
     @property
     def device(self):
@@ -127,6 +129,7 @@ class CFM(nn.Module):
         lens: int["b"] | None = None,  # noqa: F821
         steps=32,
         cfg_strength=4.0,
+        dual_cfg: tuple | None =None,
         sway_sampling_coef=None,
         seed: int | None = None,
         max_duration=6144,
@@ -210,14 +213,25 @@ class CFM(nn.Module):
                 x=x, cond=step_cond, text=text, time=t, drop_audio_cond=False, drop_text=False, drop_prompt=False,
                 style_prompt=style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
             )
-            if cfg_strength < 1e-5:
-                return pred
+            if dual_cfg is not None:
+                phoneme_pred = self.transformer(
+                    x=x, cond=step_cond, text=text, time=t, drop_audio_cond=False, drop_text=False, drop_prompt=False,
+                    style_prompt=negative_style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
+                )
+                null_pred = self.transformer(
+                    x=x, cond=step_cond, text=text, time=t, drop_audio_cond=True, drop_text=True, drop_prompt=False,
+                    style_prompt=negative_style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
+                )
+                return dual_cfg[0] * (pred-phoneme_pred) + dual_cfg[1] * (phoneme_pred-null_pred) + null_pred
+            else:
+                if cfg_strength < 1e-5:
+                    return pred
 
-            null_pred = self.transformer(
-                x=x, cond=step_cond, text=text, time=t, drop_audio_cond=True, drop_text=True, drop_prompt=False,
-                style_prompt=negative_style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
-            )
-            return pred + (pred - null_pred) * cfg_strength
+                null_pred = self.transformer(
+                    x=x, cond=step_cond, text=text, time=t, drop_audio_cond=True, drop_text=True, drop_prompt=False,
+                    style_prompt=negative_style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
+                )
+                return pred + (pred - null_pred) * cfg_strength
 
         # noise input
         # to make sure batch inference result is same with different batch size, and for sure single inference
@@ -304,6 +318,8 @@ class CFM(nn.Module):
 
         # transformer and cfg training with a drop rate
         drop_audio_cond = random() < self.audio_drop_prob  # p_drop in voicebox paper
+        if self.no_edit:
+            drop_audio_cond = True
         drop_text = random() < self.lrc_drop_prob
         drop_prompt = random() < self.style_drop_prob
 
@@ -316,6 +332,7 @@ class CFM(nn.Module):
 
         # flow matching loss
         loss = F.mse_loss(pred, flow, reduction="none")
-        loss = loss[rand_span_mask]
+        if not self.no_edit:
+            loss = loss[rand_span_mask]
 
         return loss.mean(), cond, pred
