@@ -70,6 +70,7 @@ class Trainer:
         use_style_prompt: bool = False,
         grad_ckpt: bool = False,
         use_ema: bool = False,
+        config = None,
     ):
         self.data_cfg = data_cfg
 
@@ -105,6 +106,9 @@ class Trainer:
                     "noise_scheduler": noise_scheduler,
                 },
             )
+
+        if config is not None:
+            wandb.run.log_code(root=config.project_root)
 
         self.precision = self.accelerator.state.mixed_precision
         self.precision = self.precision.replace("no", "fp32")

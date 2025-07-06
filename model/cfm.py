@@ -28,6 +28,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+from tqdm import tqdm
 
 from torchdiffeq import odeint
 
@@ -120,7 +121,6 @@ class CFM(nn.Module):
         self,
         cond: float["b n d"] | float["b nw"],  # noqa: F722
         text: int["b nt"] | list[str],  # noqa: F722
-        duration: int | int["b"],  # noqa: F821
         *,
         style_prompt = None,
         duration_abs=None,
@@ -132,24 +132,23 @@ class CFM(nn.Module):
         dual_cfg: tuple | None =None,
         sway_sampling_coef=None,
         seed: int | None = None,
-        max_duration=6144,
         vocoder: Callable[[float["b d n"]], float["b nw"]] | None = None,  # noqa: F722
-        no_ref_audio=False,
-        duplicate_test=False,
         t_inter=0.1,
         edit_mask=None,
         start_time=None,
+        cfg_range: tuple|None =None,
         latent_pred_segments=None,
         batch_infer_num=1,
     ):
         self.eval()
+        batch_size = cond.shape[0]
 
         if next(self.parameters()).dtype == torch.float16:
             cond = cond.half()
 
         # raw wave
-        if cond.shape[1] > duration:
-            cond = cond[:, :duration, :]
+        if cond.shape[1] > self.max_frames:
+            cond = cond[:, :self.max_frames, :]
 
         if cond.ndim == 2:
             cond = self.mel_spec(cond)
@@ -174,28 +173,9 @@ class CFM(nn.Module):
             cond_mask = cond_mask & edit_mask
 
         latent_pred_segments = torch.tensor(latent_pred_segments).to(cond.device)
-        fixed_span_mask = custom_mask_from_start_end_indices(cond_seq_len, latent_pred_segments, device=cond.device, max_seq_len=duration)
+        fixed_span_mask = custom_mask_from_start_end_indices(cond_seq_len, latent_pred_segments, device=cond.device, max_seq_len=self.max_frames)
         fixed_span_mask = fixed_span_mask.unsqueeze(-1)
         step_cond = torch.where(fixed_span_mask, torch.zeros_like(cond), cond)
-
-        if isinstance(duration, int):
-            duration = torch.full((batch_infer_num,), duration, device=device, dtype=torch.long)
-
-        duration = duration.clamp(max=max_duration)
-        max_duration = duration.amax()
-
-        # duplicate test corner for inner time step oberservation
-        if duplicate_test:
-            test_cond = F.pad(cond, (0, 0, cond_seq_len, max_duration - 2 * cond_seq_len), value=0.0)
-
-        if batch > 1:
-            mask = lens_to_mask(duration)
-        else:  # save memory and speed up, as single inference need no mask currently
-            mask = None
-
-        # test for no ref audio
-        if no_ref_audio:
-            cond = torch.zeros_like(cond)
 
         cond = cond.repeat(batch_infer_num, 1, 1)
         step_cond = step_cond.repeat(batch_infer_num, 1, 1)
@@ -207,12 +187,22 @@ class CFM(nn.Module):
         duration_rel = duration_rel.repeat(batch_infer_num)
         fixed_span_mask = fixed_span_mask.repeat(batch_infer_num, 1, 1)
 
+        # Initialize progress bar for sampling steps
+        pbar = tqdm(total=steps, desc="Sampling", unit="step")
+
         def fn(t, x):
+            # Update progress bar with current time value
+            pbar.set_postfix({"t": f"{t.item():.3f}"})
+            pbar.update(1)
+            
             # predict flow
             pred = self.transformer(
                 x=x, cond=step_cond, text=text, time=t, drop_audio_cond=False, drop_text=False, drop_prompt=False,
                 style_prompt=style_prompt, start_time=start_time, duration_abs=duration_abs, duration_rel=duration_rel
             )
+            if cfg_range is not None and (t < cfg_range[0] or t > cfg_range[1]):
+                return pred
+
             if dual_cfg is not None:
                 phoneme_pred = self.transformer(
                     x=x, cond=step_cond, text=text, time=t, drop_audio_cond=False, drop_text=False, drop_prompt=False,
@@ -245,24 +235,21 @@ class CFM(nn.Module):
 
         # t_start = 0
 
-        y0 = torch.randn(batch_infer_num, self.max_frames, self.num_channels, device=self.device, dtype=step_cond.dtype)
+        y0 = torch.randn(cond.shape[0], self.max_frames, self.num_channels, device=self.device, dtype=step_cond.dtype)
         t_start = 0
 
-        # duplicate test corner for inner time step oberservation
-        if duplicate_test:
-            t_start = t_inter
-            y0 = (1 - t_start) * y0 + t_start * test_cond
-            steps = int(steps * (1 - t_start))
-        
         t = torch.linspace(t_start, 1, steps, device=self.device, dtype=step_cond.dtype)
         if sway_sampling_coef is not None:
             t = t + sway_sampling_coef * (torch.cos(torch.pi / 2 * t) - 1 + t)
 
         trajectory = odeint(fn, y0, t, **self.odeint_kwargs)
+        
+        # Close progress bar
+        pbar.close()
 
         sampled = trajectory[-1]
         out = sampled
-        out = torch.where(fixed_span_mask, out, cond)
+        # out = torch.where(fixed_span_mask, out, cond)
 
         if exists(vocoder):
             out = out.permute(0, 2, 1)
