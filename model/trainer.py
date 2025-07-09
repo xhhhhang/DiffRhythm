@@ -29,6 +29,7 @@ import wandb
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR, SequentialLR, ConstantLR
+from omegaconf import OmegaConf
 
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
@@ -78,6 +79,8 @@ class Trainer:
 
         logger = "wandb" if wandb.api.api_key else None
         
+        if grad_accumulation_steps > 1:
+            print('set gradient accumulation steps to', grad_accumulation_steps)
         self.accelerator = Accelerator(
             log_with=logger,
             kwargs_handlers=[ddp_kwargs],
@@ -90,25 +93,22 @@ class Trainer:
                 init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name, "id": wandb_resume_id, "mode": wandb_mode}}
             else:
                 init_kwargs = {"wandb": {"resume": "allow", "name": wandb_run_name, "mode": wandb_mode}}
+            
+            if config is not None:
+                if OmegaConf.is_config(config):
+                    config_dict = OmegaConf.to_container(config, resolve=True)
+                else:
+                    config_dict = config
+            
             self.accelerator.init_trackers(
                 project_name=wandb_project,
                 init_kwargs=init_kwargs,
-                config={
-                    "epochs": epochs,
-                    "learning_rate": learning_rate,
-                    "num_warmup_updates": num_warmup_updates,
-                    "batch_size": batch_size,
-                    "batch_size_type": batch_size_type,
-                    "max_samples": max_samples,
-                    "grad_accumulation_steps": grad_accumulation_steps,
-                    "max_grad_norm": max_grad_norm,
-                    "gpus": self.accelerator.num_processes,
-                    "noise_scheduler": noise_scheduler,
-                },
+                config=config_dict,
             )
-
-        if config is not None:
-            wandb.run.log_code(root=config.project_root)
+            if self.is_main:
+                wb_tracker = self.accelerator.get_tracker("wandb")
+                wb_run = wb_tracker.run
+                wb_run.log_code(root=config.project_root)
 
         self.precision = self.accelerator.state.mixed_precision
         self.precision = self.precision.replace("no", "fp32")
