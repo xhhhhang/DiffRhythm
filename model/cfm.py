@@ -75,6 +75,8 @@ class CFM(nn.Module):
         cond_drop_prob=0.2,
         style_drop_prob=0.1,
         lrc_drop_prob=0.1,
+        dual_drop_prob=None,
+        no_cond_drop=False,
         num_channels=None,
         frac_lengths_mask: tuple[float, float] = (0.7, 1.0),
         vocab_char_map: dict[str:int] | None = None,
@@ -92,6 +94,12 @@ class CFM(nn.Module):
         self.cond_drop_prob = cond_drop_prob
         self.style_drop_prob = style_drop_prob
         self.lrc_drop_prob = lrc_drop_prob
+        self.dual_drop_prob = dual_drop_prob
+        if self.dual_drop_prob is not None:
+            print(f"Dual drop prob: {self.dual_drop_prob}")
+        self.no_cond_drop = no_cond_drop
+        if self.no_cond_drop:
+            print("No conditional dropout")
 
         # transformer
         self.transformer = transformer
@@ -303,12 +311,20 @@ class CFM(nn.Module):
         # only predict what is within the random mask span for infilling
         cond = torch.where(rand_span_mask[..., None], torch.zeros_like(x1), x1)
 
+        if self.dual_drop_prob is not None:
+            drop_prompt = random() < self.dual_drop_prob[0]
+            drop_text = drop_prompt and (random() < self.dual_drop_prob[1])
+        else:
+            drop_text = random() < self.lrc_drop_prob
+            drop_prompt = random() < self.style_drop_prob
+        if self.no_cond_drop:
+            drop_text = False
+            drop_prompt = False
+
         # transformer and cfg training with a drop rate
         drop_audio_cond = random() < self.audio_drop_prob  # p_drop in voicebox paper
         if self.no_edit:
             drop_audio_cond = True
-        drop_text = random() < self.lrc_drop_prob
-        drop_prompt = random() < self.style_drop_prob
 
         # if want rigourously mask out padding, record in collate_fn in dataset.py, and pass in here
         # adding mask will use more memory, thus also need to adjust batchsampler with scaled down threshold for long sequences
